@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { LEAPMOTOR_B10 } from '../config/vehicle';
 
+/** Kept for RATE_PRESETS used by charging flow; rate is no longer a global setting. */
 interface SettingsState {
   electricityRateMmk: number;
   customRate: boolean;

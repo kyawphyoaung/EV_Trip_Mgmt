@@ -8,6 +8,9 @@ export interface Vehicle {
   battery_capacity_kwh: number;
   current_soc_percent: number;
   updated_at: string;
+  /** Last known position from battery log (optional). */
+  last_latitude?: number | null;
+  last_longitude?: number | null;
 }
 
 export interface Trip {
@@ -23,6 +26,9 @@ export interface Trip {
   energy_driving_kwh: number;
   energy_hvac_kwh: number;
   energy_other_kwh: number;
+  latitude?: number | null;
+  longitude?: number | null;
+  created_at?: string;
   sync_status: SyncStatus;
   updated_at: string;
 }
@@ -63,6 +69,16 @@ export interface ChargingStation {
   max_power_kw: number;
 }
 
+export interface BatteryLog {
+  id: string;
+  soc_percent: number;
+  latitude: number | null;
+  longitude: number | null;
+  timestamp: string;
+  sync_status: SyncStatus;
+  updated_at: string;
+}
+
 export interface SyncQueueItem {
   id?: number;
   table_name: string;
@@ -77,6 +93,7 @@ class LeapmotorDB extends Dexie {
   trip_points!: EntityTable<TripPoint, 'id'>;
   charging_sessions!: EntityTable<ChargingSession, 'id'>;
   charging_stations!: EntityTable<ChargingStation, 'id'>;
+  battery_logs!: EntityTable<BatteryLog, 'id'>;
   sync_queue!: EntityTable<SyncQueueItem, 'id'>;
 
   constructor() {
@@ -87,6 +104,15 @@ class LeapmotorDB extends Dexie {
       trip_points: 'id, trip_id, timestamp',
       charging_sessions: 'id, start_time, sync_status',
       charging_stations: 'id',
+      sync_queue: '++id, table_name, created_at',
+    });
+    this.version(2).stores({
+      vehicles: 'id',
+      trips: 'id, start_time, sync_status, created_at',
+      trip_points: 'id, trip_id, timestamp',
+      charging_sessions: 'id, start_time, sync_status',
+      charging_stations: 'id',
+      battery_logs: 'id, timestamp, sync_status',
       sync_queue: '++id, table_name, created_at',
     });
   }
@@ -145,6 +171,8 @@ export async function ensureSeedData(): Promise<void> {
       battery_capacity_kwh: LEAPMOTOR_B10.batteryCapacityKwh,
       current_soc_percent: 72,
       updated_at: new Date().toISOString(),
+      last_latitude: null,
+      last_longitude: null,
     });
   }
 

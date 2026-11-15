@@ -3,6 +3,12 @@ import { supabase, supabaseConfigured } from '../supabaseClient';
 
 let syncing = false;
 
+const SYNCABLE_WITH_STATUS = new Set([
+  'trips',
+  'charging_sessions',
+  'battery_logs',
+]);
+
 export async function enqueueSync(
   table_name: string,
   action: 'upsert' | 'delete',
@@ -28,22 +34,16 @@ async function pushItem(item: SyncQueueItem): Promise<void> {
     return;
   }
 
-  // Strip local-only fields that may not exist on remote
   const remotePayload = { ...payload };
-  if (table_name === 'charging_sessions' && 'max_power_kw' in remotePayload) {
-    // keep max_power_kw if migration includes it; otherwise strip
-  }
 
   const { error } = await supabase.from(table_name).upsert(remotePayload);
   if (error) throw error;
 
-  // Mark local record synced when applicable
   if (payload.id && typeof payload.id === 'string') {
-    const table = table_name as 'trips' | 'charging_sessions' | 'trip_points' | 'vehicles';
-    if (table === 'trips' || table === 'charging_sessions') {
-      await db.table(table).update(payload.id, { sync_status: 'synced' });
+    if (SYNCABLE_WITH_STATUS.has(table_name)) {
+      await db.table(table_name).update(payload.id, { sync_status: 'synced' });
     }
-    if (table === 'trip_points') {
+    if (table_name === 'trip_points') {
       await db.trip_points.update(payload.id, {
         synced_at: new Date().toISOString(),
       });
