@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  --color-base: #0B0F14;
+  --color-surface: #151B23;
+  --color-elevated: #1E2630;
+  --color-primary: #22D3EE;
+  --color-secondary: #A78BFA;
+  --color-success: #34D399;
+  --color-warning: #FBBF24;
+  --color-danger: #F87171;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background-color: var(--color-base);
+  color: #F1F5F9;
+  font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-elevated);
+  background: var(--color-base);
+  padding: 0.625rem 0.75rem;
+  color: #F1F5F9;
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* MapLibre attribution sits above bottom nav */
+.maplibregl-ctrl-bottom-left,
+.maplibregl-ctrl-bottom-right {
+  margin-bottom: 0.5rem;
+}
