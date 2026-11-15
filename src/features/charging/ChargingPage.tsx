@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { PlugZap, Square, Timer } from 'lucide-react';
+import { Pencil, PlugZap, Square, Timer, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Card } from '../../components/Card';
 import { SyncStatusIcon } from '../../components/SyncStatusIcon';
@@ -11,23 +11,29 @@ import {
   type ChargerType,
 } from '../../lib/algorithms/charging';
 import { db, type ChargingSession } from '../../lib/db/database';
-import { writeChargingSession, writeVehicle } from '../../lib/db/repository';
-import { RATE_PRESETS, useSettingsStore } from '../../stores/settingsStore';
+import {
+  deleteChargingSession,
+  writeChargingSession,
+  writeVehicle,
+} from '../../lib/db/repository';
+import { formatAbsoluteDateTime, formatRemainingIn } from '../../lib/format';
+import { RATE_PRESETS } from '../../stores/settingsStore';
 
 export function ChargingPage() {
-  const sessions = useLiveQuery(() =>
-    db.charging_sessions.orderBy('start_time').reverse().toArray(),
-  ) ?? [];
+  const sessions =
+    useLiveQuery(() => db.charging_sessions.orderBy('start_time').reverse().toArray()) ??
+    [];
   const vehicle = useLiveQuery(() => db.vehicles.get(LEAPMOTOR_B10.id));
-  const rate = useSettingsStore((s) => s.electricityRateMmk);
 
   const active = sessions.find((s) => s.end_time == null) ?? null;
   const history = sessions.filter((s) => s.end_time != null);
 
   const [showStart, setShowStart] = useState(false);
   const [showFinish, setShowFinish] = useState(false);
+  const [editing, setEditing] = useState<ChargingSession | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  // Tick while active — progress persists via start_time from Dexie
   useEffect(() => {
     if (!active) return;
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -66,8 +72,23 @@ export function ChargingPage() {
     ? Math.max(0, prediction.timeTo100Hours - elapsedHours)
     : 0;
 
+  const startTimeMs = active ? new Date(active.start_time).getTime() : 0;
+  const eta80 = active
+    ? new Date(startTimeMs + (prediction?.timeTo80Hours ?? 0) * 3_600_000)
+    : null;
+  const eta100 = active
+    ? new Date(startTimeMs + (prediction?.timeTo100Hours ?? 0) * 3_600_000)
+    : null;
+
+  async function handleDelete(session: ChargingSession) {
+    if (!window.confirm(`Delete charging session "${session.station_name || 'Session'}"?`)) {
+      return;
+    }
+    await deleteChargingSession(session.id);
+  }
+
   return (
-    <div className="px-4 pt-6 space-y-4 max-w-lg mx-auto">
+    <div className="px-4 pt-6 space-y-4 max-w-lg mx-auto pb-4">
       <header>
         <p className="text-xs uppercase tracking-widest text-warning/80">Energy</p>
         <h1 className="text-2xl font-semibold">Charging</h1>
@@ -97,10 +118,11 @@ export function ChargingPage() {
           </div>
           <p className="text-sm text-slate-400 mb-1">
             {active.charger_type} · {active.max_power_kw} kW · from {active.start_soc}%
+            {active.station_name ? ` · ${active.station_name}` : ''}
           </p>
           <p className="text-xs text-slate-500 mb-4">
-            Started {new Date(active.start_time).toLocaleString()} · elapsed{' '}
-            {formatDuration(elapsedHours)}
+            Started {formatAbsoluteDateTime(active.start_time)} · elapsed{' '}
+            {formatDuration(elapsedHours)} · {active.rate_per_kwh_mmk} MMK/kWh
           </p>
 
           <div className="mb-2 flex items-end justify-between">
@@ -116,15 +138,30 @@ export function ChargingPage() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            <div className="rounded-xl bg-base/50 px-3 py-2">
-              <p className="text-[10px] uppercase text-slate-500">To 80%</p>
-              <p className="font-semibold tabular-nums">{formatDuration(remainingTo80)}</p>
-            </div>
-            <div className="rounded-xl bg-base/50 px-3 py-2">
-              <p className="text-[10px] uppercase text-slate-500">To 100%</p>
-              <p className="font-semibold tabular-nums">{formatDuration(remainingTo100)}</p>
-            </div>
+          <div className="space-y-2 mb-4 rounded-xl bg-base/50 px-3 py-3">
+            <p className="text-[10px] uppercase text-slate-500 mb-1">Milestones</p>
+            {eta80 && (
+              <p className="text-sm text-slate-200">
+                80%:{' '}
+                <span className="font-semibold tabular-nums">
+                  {formatAbsoluteDateTime(eta80)}
+                </span>{' '}
+                <span className="text-slate-400 text-xs">
+                  (in {formatRemainingIn(remainingTo80)})
+                </span>
+              </p>
+            )}
+            {eta100 && (
+              <p className="text-sm text-slate-200">
+                100%:{' '}
+                <span className="font-semibold tabular-nums">
+                  {formatAbsoluteDateTime(eta100)}
+                </span>{' '}
+                <span className="text-slate-400 text-xs">
+                  (in {formatRemainingIn(remainingTo100)})
+                </span>
+              </p>
+            )}
           </div>
 
           {prediction && (
@@ -166,20 +203,43 @@ export function ChargingPage() {
           {history.map((s) => (
             <Card key={s.id} className="!p-3">
               <div className="flex items-start justify-between gap-2">
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="font-medium text-sm">
                     {s.station_name || 'Session'} · {s.charger_type}
                   </p>
                   <p className="text-xs text-slate-400">
-                    {new Date(s.start_time).toLocaleString()}
+                    {formatAbsoluteDateTime(s.start_time)}
+                    {s.end_time ? ` → ${formatAbsoluteDateTime(s.end_time)}` : ''}
                   </p>
                   <p className="text-xs text-slate-300 mt-1 tabular-nums">
                     {(s.energy_added_kwh ?? 0).toFixed(1)} kWh ·{' '}
                     {(s.avg_power_kw ?? 0).toFixed(1)} kW avg ·{' '}
                     {(s.cost_mmk ?? 0).toLocaleString()} MMK
                   </p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    {(s.energy_added_kwh ?? 0).toFixed(1)} kWh × {s.rate_per_kwh_mmk} MMK/kWh ={' '}
+                    {(s.cost_mmk ?? 0).toLocaleString()} MMK
+                  </p>
                 </div>
-                <SyncStatusIcon status={s.sync_status} />
+                <div className="flex items-center gap-1 shrink-0">
+                  <SyncStatusIcon status={s.sync_status} />
+                  <button
+                    type="button"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-primary"
+                    aria-label="Edit session"
+                    onClick={() => setEditing(s)}
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-danger"
+                    aria-label="Delete session"
+                    onClick={() => void handleDelete(s)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
             </Card>
           ))}
@@ -202,7 +262,7 @@ export function ChargingPage() {
               energy_added_kwh: null,
               avg_power_kw: null,
               cost_mmk: null,
-              rate_per_kwh_mmk: rate,
+              rate_per_kwh_mmk: data.ratePerKwhMmk,
               max_power_kw: data.maxPowerKw,
               sync_status: 'pending',
               updated_at: new Date().toISOString(),
@@ -216,7 +276,6 @@ export function ChargingPage() {
       {showFinish && active && (
         <FinishModal
           session={active}
-          defaultRate={active.rate_per_kwh_mmk || rate}
           onClose={() => setShowFinish(false)}
           onFinish={async (data) => {
             const durationHours =
@@ -248,7 +307,68 @@ export function ChargingPage() {
           }}
         />
       )}
+
+      {editing && (
+        <EditSessionModal
+          session={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => setEditing(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function RateSelector({
+  rate,
+  custom,
+  onChange,
+}: {
+  rate: number;
+  custom: boolean;
+  onChange: (rate: number, custom: boolean) => void;
+}) {
+  return (
+    <>
+      <label className="block text-xs text-slate-400 mb-1">Electricity rate (MMK/kWh)</label>
+      <div className="flex flex-wrap gap-2 mb-2">
+        {RATE_PRESETS.map((r) => (
+          <button
+            key={r}
+            type="button"
+            onClick={() => onChange(r, false)}
+            className={`rounded-xl px-3 py-1.5 text-xs border ${
+              !custom && rate === r
+                ? 'border-primary bg-primary/15 text-primary'
+                : 'border-elevated text-slate-400'
+            }`}
+          >
+            {r}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => onChange(rate, true)}
+          className={`rounded-xl px-3 py-1.5 text-xs border ${
+            custom
+              ? 'border-primary bg-primary/15 text-primary'
+              : 'border-elevated text-slate-400'
+          }`}
+        >
+          Custom
+        </button>
+      </div>
+      {custom && (
+        <input
+          type="number"
+          className="input mb-3"
+          value={rate}
+          min={0}
+          onChange={(e) => onChange(Number(e.target.value), true)}
+        />
+      )}
+      {!custom && <div className="mb-3" />}
+    </>
   );
 }
 
@@ -264,15 +384,24 @@ function StartModal({
     maxPowerKw: number;
     startSoc: number;
     stationName: string;
+    ratePerKwhMmk: number;
+    targetSoc: number;
   }) => Promise<void>;
 }) {
   const [chargerType, setChargerType] = useState<ChargerType>('DC');
   const [maxPowerKw, setMaxPowerKw] = useState(60);
   const [startSoc, setStartSoc] = useState(Math.round(defaultSoc));
+  const [targetSoc, setTargetSoc] = useState(100);
   const [stationName, setStationName] = useState('');
+  const [rate, setRate] = useState<number>(LEAPMOTOR_B10.defaultElectricityRateMMK);
+  const [customRate, setCustomRate] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const presets = chargerType === 'DC' ? [60, 30] : [7, 11];
+
+  const energyNeeded =
+    Math.max(0, (targetSoc - startSoc) / 100) * LEAPMOTOR_B10.batteryCapacityKwh;
+  const estimatedCost = energyNeeded * rate;
 
   return (
     <Modal title="Start Charging" onClose={onClose}>
@@ -331,15 +460,47 @@ function StartModal({
         max={350}
       />
 
-      <label className="block text-xs text-slate-400 mb-1">Start SOC %</label>
-      <input
-        type="number"
-        className="input mb-4"
-        value={startSoc}
-        onChange={(e) => setStartSoc(Number(e.target.value))}
-        min={0}
-        max={100}
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Current SOC %</label>
+          <input
+            type="number"
+            className="input"
+            value={startSoc}
+            onChange={(e) => setStartSoc(Number(e.target.value))}
+            min={0}
+            max={100}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Target SOC %</label>
+          <input
+            type="number"
+            className="input"
+            value={targetSoc}
+            onChange={(e) => setTargetSoc(Number(e.target.value))}
+            min={0}
+            max={100}
+          />
+        </div>
+      </div>
+
+      <RateSelector
+        rate={rate}
+        custom={customRate}
+        onChange={(r, c) => {
+          setRate(r);
+          setCustomRate(c);
+        }}
       />
+
+      <div className="rounded-xl bg-elevated/60 border border-primary/20 p-3 mb-4">
+        <p className="text-xs text-slate-500 mb-1">Estimated cost to full charge</p>
+        <p className="text-sm font-semibold text-primary tabular-nums">
+          To reach {targetSoc}%: ~{energyNeeded.toFixed(1)} kWh →{' '}
+          {Math.round(estimatedCost).toLocaleString()} MMK
+        </p>
+      </div>
 
       <button
         type="button"
@@ -347,7 +508,14 @@ function StartModal({
         className="w-full rounded-xl bg-primary text-base font-semibold py-3 disabled:opacity-50"
         onClick={async () => {
           setSaving(true);
-          await onStart({ chargerType, maxPowerKw, startSoc, stationName });
+          await onStart({
+            chargerType,
+            maxPowerKw,
+            startSoc,
+            stationName,
+            ratePerKwhMmk: rate,
+            targetSoc,
+          });
           setSaving(false);
         }}
       >
@@ -359,12 +527,10 @@ function StartModal({
 
 function FinishModal({
   session,
-  defaultRate,
   onClose,
   onFinish,
 }: {
   session: ChargingSession;
-  defaultRate: number;
   onClose: () => void;
   onFinish: (data: {
     endSoc: number;
@@ -375,8 +541,10 @@ function FinishModal({
 }) {
   const [endSoc, setEndSoc] = useState(80);
   const [energy, setEnergy] = useState(20);
-  const [rate, setRate] = useState(defaultRate);
-  const [custom, setCustom] = useState(false);
+  const [rate, setRate] = useState(session.rate_per_kwh_mmk || LEAPMOTOR_B10.defaultElectricityRateMMK);
+  const [custom, setCustom] = useState(
+    !RATE_PRESETS.includes(session.rate_per_kwh_mmk as (typeof RATE_PRESETS)[number]),
+  );
   const [saving, setSaving] = useState(false);
   const endTime = new Date().toISOString();
   const durationHours =
@@ -406,45 +574,14 @@ function FinishModal({
         min={0}
       />
 
-      <label className="block text-xs text-slate-400 mb-1">Rate (MMK/kWh)</label>
-      <div className="flex flex-wrap gap-2 mb-2">
-        {RATE_PRESETS.map((r) => (
-          <button
-            key={r}
-            type="button"
-            onClick={() => {
-              setRate(r);
-              setCustom(false);
-            }}
-            className={`rounded-xl px-3 py-1.5 text-xs border ${
-              !custom && rate === r
-                ? 'border-primary bg-primary/15 text-primary'
-                : 'border-elevated text-slate-400'
-            }`}
-          >
-            {r}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => setCustom(true)}
-          className={`rounded-xl px-3 py-1.5 text-xs border ${
-            custom
-              ? 'border-primary bg-primary/15 text-primary'
-              : 'border-elevated text-slate-400'
-          }`}
-        >
-          Custom
-        </button>
-      </div>
-      {custom && (
-        <input
-          type="number"
-          className="input mb-3"
-          value={rate}
-          onChange={(e) => setRate(Number(e.target.value))}
-        />
-      )}
+      <RateSelector
+        rate={rate}
+        custom={custom}
+        onChange={(r, c) => {
+          setRate(r);
+          setCustom(c);
+        }}
+      />
 
       <div className="rounded-xl bg-elevated/60 p-3 text-sm mb-4 space-y-1">
         <p>
@@ -452,10 +589,14 @@ function FinishModal({
           <span className="font-semibold tabular-nums">{avgPreview.toFixed(2)} kW</span>
         </p>
         <p>
-          Cost:{' '}
-          <span className="font-semibold tabular-nums">{costPreview.toLocaleString()} MMK</span>
+          Actual cost:{' '}
+          <span className="font-semibold tabular-nums">
+            {energy.toFixed(1)} kWh × {rate} = {costPreview.toLocaleString()} MMK
+          </span>
         </p>
-        <p className="text-xs text-slate-500">End time: now ({formatDuration(durationHours)})</p>
+        <p className="text-xs text-slate-500">
+          End time: now ({formatDuration(durationHours)})
+        </p>
       </div>
 
       <button
@@ -469,6 +610,169 @@ function FinishModal({
         }}
       >
         Save session
+      </button>
+    </Modal>
+  );
+}
+
+function toLocalInputValue(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function EditSessionModal({
+  session,
+  onClose,
+  onSaved,
+}: {
+  session: ChargingSession;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [stationName, setStationName] = useState(session.station_name);
+  const [chargerType, setChargerType] = useState<ChargerType>(session.charger_type);
+  const [startSoc, setStartSoc] = useState(session.start_soc);
+  const [endSoc, setEndSoc] = useState(session.end_soc ?? session.start_soc);
+  const [energy, setEnergy] = useState(session.energy_added_kwh ?? 0);
+  const [rate, setRate] = useState(session.rate_per_kwh_mmk);
+  const [customRate, setCustomRate] = useState(
+    !RATE_PRESETS.includes(session.rate_per_kwh_mmk as (typeof RATE_PRESETS)[number]),
+  );
+  const [startTime, setStartTime] = useState(toLocalInputValue(session.start_time));
+  const [endTime, setEndTime] = useState(
+    session.end_time ? toLocalInputValue(session.end_time) : toLocalInputValue(new Date().toISOString()),
+  );
+  const [saving, setSaving] = useState(false);
+
+  const cost = energy * rate;
+
+  async function save() {
+    setSaving(true);
+    try {
+      const startIso = new Date(startTime).toISOString();
+      const endIso = new Date(endTime).toISOString();
+      const durationHours =
+        (new Date(endIso).getTime() - new Date(startIso).getTime()) / 3_600_000;
+      const avgPower = durationHours > 0 ? energy / durationHours : 0;
+
+      await writeChargingSession({
+        ...session,
+        station_name: stationName,
+        charger_type: chargerType,
+        start_soc: startSoc,
+        end_soc: endSoc,
+        energy_added_kwh: energy,
+        rate_per_kwh_mmk: rate,
+        cost_mmk: cost,
+        avg_power_kw: avgPower,
+        start_time: startIso,
+        end_time: endIso,
+        sync_status: 'pending',
+        updated_at: new Date().toISOString(),
+      });
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title="Edit Charging Session" onClose={onClose}>
+      <label className="block text-xs text-slate-400 mb-1">Station name</label>
+      <input
+        className="input mb-3"
+        value={stationName}
+        onChange={(e) => setStationName(e.target.value)}
+      />
+
+      <label className="block text-xs text-slate-400 mb-1">Charger type</label>
+      <div className="flex gap-2 mb-3">
+        {(['DC', 'AC'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setChargerType(t)}
+            className={`flex-1 rounded-xl py-2.5 text-sm font-medium border ${
+              chargerType === t
+                ? 'border-primary bg-primary/15 text-primary'
+                : 'border-elevated text-slate-400'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Start SOC %</label>
+          <input
+            type="number"
+            className="input"
+            value={startSoc}
+            onChange={(e) => setStartSoc(Number(e.target.value))}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">End SOC %</label>
+          <input
+            type="number"
+            className="input"
+            value={endSoc}
+            onChange={(e) => setEndSoc(Number(e.target.value))}
+          />
+        </div>
+      </div>
+
+      <label className="block text-xs text-slate-400 mb-1">Energy added (kWh)</label>
+      <input
+        type="number"
+        className="input mb-3"
+        step={0.1}
+        value={energy}
+        onChange={(e) => setEnergy(Number(e.target.value))}
+      />
+
+      <RateSelector
+        rate={rate}
+        custom={customRate}
+        onChange={(r, c) => {
+          setRate(r);
+          setCustomRate(c);
+        }}
+      />
+
+      <div className="rounded-xl bg-elevated/60 p-3 text-sm mb-3">
+        Cost:{' '}
+        <span className="font-semibold tabular-nums">
+          {energy.toFixed(1)} × {rate} = {Math.round(cost).toLocaleString()} MMK
+        </span>
+      </div>
+
+      <label className="block text-xs text-slate-400 mb-1">Start time</label>
+      <input
+        type="datetime-local"
+        className="input mb-3"
+        value={startTime}
+        onChange={(e) => setStartTime(e.target.value)}
+      />
+
+      <label className="block text-xs text-slate-400 mb-1">End time</label>
+      <input
+        type="datetime-local"
+        className="input mb-4"
+        value={endTime}
+        onChange={(e) => setEndTime(e.target.value)}
+      />
+
+      <button
+        type="button"
+        disabled={saving}
+        className="w-full rounded-xl bg-primary text-base font-semibold py-3 disabled:opacity-50"
+        onClick={() => void save()}
+      >
+        Save changes
       </button>
     </Modal>
   );

@@ -1,8 +1,8 @@
 import {
   db,
+  type BatteryLog,
   type ChargingSession,
   type Trip,
-  type TripPoint,
   type Vehicle,
 } from './database';
 import { enqueueSync } from './offlineSync';
@@ -19,9 +19,9 @@ export async function writeTrip(trip: Trip): Promise<void> {
   await enqueueSync('trips', 'upsert', { ...local });
 }
 
-export async function writeTripPoint(point: TripPoint): Promise<void> {
-  await db.trip_points.put(point);
-  await enqueueSync('trip_points', 'upsert', { ...point });
+export async function deleteTrip(id: string): Promise<void> {
+  await db.trips.delete(id);
+  await enqueueSync('trips', 'delete', { id });
 }
 
 export async function writeChargingSession(session: ChargingSession): Promise<void> {
@@ -30,11 +30,28 @@ export async function writeChargingSession(session: ChargingSession): Promise<vo
   await enqueueSync('charging_sessions', 'upsert', { ...local });
 }
 
+export async function deleteChargingSession(id: string): Promise<void> {
+  await db.charging_sessions.delete(id);
+  await enqueueSync('charging_sessions', 'delete', { id });
+}
+
+export async function writeBatteryLog(log: BatteryLog): Promise<void> {
+  const local: BatteryLog = { ...log, sync_status: 'pending' };
+  await db.battery_logs.put(local);
+  await enqueueSync('battery_logs', 'upsert', { ...local });
+}
+
+export async function deleteBatteryLog(id: string): Promise<void> {
+  await db.battery_logs.delete(id);
+  await enqueueSync('battery_logs', 'delete', { id });
+}
+
 export async function clearLocalData(): Promise<void> {
   await Promise.all([
     db.trips.clear(),
     db.trip_points.clear(),
     db.charging_sessions.clear(),
+    db.battery_logs.clear(),
     db.sync_queue.clear(),
   ]);
 }

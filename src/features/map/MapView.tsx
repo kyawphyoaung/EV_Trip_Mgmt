@@ -20,8 +20,10 @@ import {
   socOnArrival,
   type ReachBadge,
 } from '../../lib/algorithms/range';
+import { getCurrentPositionOnce } from '../../lib/geo';
 
-const YANGON: [number, number] = [96.1561, 16.7794];
+/** Yangon default center */
+const YANGON: [number, number] = [96.1951, 16.8409];
 const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
 interface LineGeometry {
@@ -65,32 +67,67 @@ export function MapView() {
   const [stationDetail, setStationDetail] = useState<StationDetail | null>(null);
   const [dest, setDest] = useState<[number, number] | null>(null);
   const [routing, setRouting] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
   // Init map
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return;
 
-    const map = new MapLibreMap({
-      container: mapContainer.current,
-      style: DARK_STYLE,
-      center: YANGON,
-      zoom: 12,
-    });
+    let cancelled = false;
+    let map: MapLibreMap;
+
+    try {
+      map = new MapLibreMap({
+        container: mapContainer.current,
+        style: DARK_STYLE,
+        center: YANGON,
+        zoom: 11,
+      });
+    } catch (err) {
+      console.warn(err);
+      setMapError('Failed to initialize map.');
+      return;
+    }
+
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right');
     mapRef.current = map;
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords: [number, number] = [pos.coords.longitude, pos.coords.latitude];
+    const onLoad = () => {
+      if (cancelled) return;
+      setMapReady(true);
+      setMapError(null);
+      map.resize();
+    };
+
+    const onError = (e: unknown) => {
+      console.warn('MapLibre error', e);
+      const err = e as { error?: { message?: string } };
+      const msg = err?.error?.message ?? '';
+      if (/style|failed to fetch|network|CORS|403|404/i.test(msg) || !map.isStyleLoaded()) {
+        setMapError('Map style failed to load. Check your connection and try again.');
+      }
+    };
+
+    map.on('load', onLoad);
+    map.on('error', onError);
+
+    const onResize = () => map.resize();
+    window.addEventListener('resize', onResize);
+    // Layout may settle after first paint
+    requestAnimationFrame(() => map.resize());
+
+    void getCurrentPositionOnce().then((pos) => {
+      if (cancelled || !mapRef.current) return;
+      if (pos) {
+        const coords: [number, number] = [pos.longitude, pos.latitude];
         userPosRef.current = coords;
         map.setCenter(coords);
         new Marker({ color: '#22D3EE' }).setLngLat(coords).addTo(map);
-      },
-      () => {
+      } else {
         new Marker({ color: '#22D3EE' }).setLngLat(YANGON).addTo(map);
-      },
-      { enableHighAccuracy: true, timeout: 8000 },
-    );
+      }
+    });
 
     map.on('click', (e: MapMouseEvent) => {
       const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
@@ -103,57 +140,54 @@ export function MapView() {
     });
 
     return () => {
+      cancelled = true;
+      window.removeEventListener('resize', onResize);
       map.remove();
       mapRef.current = null;
     };
   }, []);
 
-  // Station markers
+  // Station markers after map load
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || stations.length === 0) return;
+    if (!map || !mapReady || stations.length === 0) return;
 
-    const addMarkers = () => {
-      stationMarkersRef.current.forEach((m) => m.remove());
-      stationMarkersRef.current = [];
+    stationMarkersRef.current.forEach((m) => m.remove());
+    stationMarkersRef.current = [];
 
-      for (const station of stations) {
-        const el = document.createElement('button');
-        el.type = 'button';
-        el.className = 'w-4 h-4 rounded-full border-2 border-white shadow-lg cursor-pointer';
-        el.style.backgroundColor =
-          station.charger_type === 'DC' ? '#FB923C' : '#38BDF8';
-        el.title = station.name;
+    for (const station of stations) {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'w-4 h-4 rounded-full border-2 border-white shadow-lg cursor-pointer';
+      el.style.backgroundColor =
+        station.charger_type === 'DC' ? '#FB923C' : '#38BDF8';
+      el.title = station.name;
 
-        el.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          const from = userPosRef.current;
-          const dist = haversineMeters(
-            from[1],
-            from[0],
-            station.latitude,
-            station.longitude,
-          );
-          const arrival = socOnArrival(soc, dist / 1000, consumption);
-          setStationDetail({
-            station,
-            distanceMeters: dist,
-            arrivalSoc: arrival,
-            recommendation: arrival < 20 ? 'Stop Here' : 'Continue',
-          });
-          setRouteInfo(null);
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const from = userPosRef.current;
+        const dist = haversineMeters(
+          from[1],
+          from[0],
+          station.latitude,
+          station.longitude,
+        );
+        const arrival = socOnArrival(soc, dist / 1000, consumption);
+        setStationDetail({
+          station,
+          distanceMeters: dist,
+          arrivalSoc: arrival,
+          recommendation: arrival < 20 ? 'Stop Here' : 'Continue',
         });
+        setRouteInfo(null);
+      });
 
-        const marker = new Marker({ element: el })
-          .setLngLat([station.longitude, station.latitude])
-          .addTo(map);
-        stationMarkersRef.current.push(marker);
-      }
-    };
-
-    if (map.isStyleLoaded()) addMarkers();
-    else map.once('load', addMarkers);
-  }, [stations, soc, consumption]);
+      const marker = new Marker({ element: el })
+        .setLngLat([station.longitude, station.latitude])
+        .addTo(map);
+      stationMarkersRef.current.push(marker);
+    }
+  }, [stations, soc, consumption, mapReady]);
 
   // Route when dest changes
   useEffect(() => {
@@ -188,7 +222,6 @@ export function MapView() {
       drawRoute(geometry);
     } catch (err) {
       console.warn(err);
-      // Offline fallback: straight-line estimate
       const dist = haversineMeters(from[1], from[0], to[1], to[0]) * 1.3;
       const energyKwh = energyNeededKwh(dist / 1000, consumption);
       const arrivalSoc = socOnArrival(soc, dist / 1000, consumption);
@@ -260,8 +293,24 @@ export function MapView() {
   };
 
   return (
-    <div className="relative h-[calc(100dvh-4.5rem)]">
-      <div ref={mapContainer} className="absolute inset-0" />
+    <div className="relative h-[calc(100dvh-4.5rem)] min-h-[60vh] w-full">
+      <div ref={mapContainer} className="absolute inset-0 h-full w-full min-h-[60vh]" />
+
+      {mapError && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-base/90 p-6">
+          <div className="max-w-sm rounded-2xl border border-danger/40 bg-surface p-4 text-center">
+            <p className="text-sm text-danger mb-2">Map unavailable</p>
+            <p className="text-xs text-slate-400 mb-3">{mapError}</p>
+            <button
+              type="button"
+              className="rounded-xl bg-primary/20 text-primary px-4 py-2 text-sm"
+              onClick={() => window.location.reload()}
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="absolute top-3 left-3 right-3 z-10 pointer-events-none">
         <div className="pointer-events-auto inline-flex items-center gap-2 rounded-xl bg-surface/90 backdrop-blur px-3 py-2 border border-elevated text-xs text-slate-300">
@@ -270,7 +319,6 @@ export function MapView() {
         </div>
       </div>
 
-      {/* Route bottom sheet */}
       {routeInfo && (
         <div className="absolute bottom-0 inset-x-0 z-20 p-3 animate-in">
           <div className="rounded-2xl bg-surface/95 backdrop-blur border border-elevated p-4 shadow-2xl max-w-lg mx-auto">
@@ -302,7 +350,6 @@ export function MapView() {
         </div>
       )}
 
-      {/* Station detail sheet */}
       {stationDetail && (
         <div className="absolute bottom-0 inset-x-0 z-20 p-3">
           <div className="rounded-2xl bg-surface/95 backdrop-blur border border-elevated p-4 shadow-2xl max-w-lg mx-auto">

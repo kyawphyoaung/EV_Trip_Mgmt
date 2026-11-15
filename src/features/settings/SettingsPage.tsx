@@ -10,14 +10,11 @@ import {
   processSyncQueue,
 } from '../../lib/db/offlineSync';
 import { supabaseConfigured } from '../../lib/supabaseClient';
-import { RATE_PRESETS, useSettingsStore } from '../../stores/settingsStore';
 
 export function SettingsPage() {
-  const { electricityRateMmk, customRate, setElectricityRate } = useSettingsStore();
   const [online, setOnline] = useState(navigator.onLine);
   const [pending, setPending] = useState(0);
   const [syncing, setSyncing] = useState(false);
-  const [customValue, setCustomValue] = useState(electricityRateMmk);
   const [message, setMessage] = useState('');
 
   const queueCount = useLiveQuery(() => getPendingSyncCount(), []) ?? 0;
@@ -51,7 +48,9 @@ export function SettingsPage() {
   }
 
   async function handleClear() {
-    if (!window.confirm('Clear all local trips, charging sessions, and sync queue?')) return;
+    if (!window.confirm('Clear all local trips, charging sessions, battery logs, and sync queue?')) {
+      return;
+    }
     await clearLocalData();
     await ensureSeedData();
     setMessage('Local data cleared. Vehicle & stations reseeded.');
@@ -63,52 +62,6 @@ export function SettingsPage() {
         <p className="text-xs uppercase tracking-widest text-slate-500">Preferences</p>
         <h1 className="text-2xl font-semibold">Settings</h1>
       </header>
-
-      <Card>
-        <h2 className="text-sm font-medium mb-3">Electricity rate (MMK/kWh)</h2>
-        <div className="flex flex-wrap gap-2 mb-3">
-          {RATE_PRESETS.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setElectricityRate(r, false)}
-              className={`rounded-xl px-3 py-2 text-sm border transition ${
-                !customRate && electricityRateMmk === r
-                  ? 'border-primary bg-primary/15 text-primary'
-                  : 'border-elevated text-slate-400 hover:border-slate-500'
-              }`}
-            >
-              {r}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setElectricityRate(customValue, true)}
-            className={`rounded-xl px-3 py-2 text-sm border ${
-              customRate
-                ? 'border-primary bg-primary/15 text-primary'
-                : 'border-elevated text-slate-400'
-            }`}
-          >
-            Custom
-          </button>
-        </div>
-        {customRate && (
-          <input
-            type="number"
-            className="input"
-            value={customValue}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setCustomValue(v);
-              setElectricityRate(v, true);
-            }}
-          />
-        )}
-        <p className="text-xs text-slate-500 mt-2">
-          Current: <span className="text-slate-300">{electricityRateMmk} MMK/kWh</span>
-        </p>
-      </Card>
 
       <Card>
         <h2 className="text-sm font-medium mb-3">Data sync</h2>
@@ -130,6 +83,9 @@ export function SettingsPage() {
         </div>
         <p className="text-xs text-slate-500 mb-3">
           Supabase: {supabaseConfigured ? 'configured' : 'not configured'}
+        </p>
+        <p className="text-xs text-slate-500 mb-3">
+          Electricity rate is chosen when you start a charging session.
         </p>
         <button
           type="button"
